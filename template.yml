@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploy an ECS cluster running Jenkins with a persistent data store
+
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups:
+      - Label:
+          default: ECS Details
+        Parameters:
+          - ClusterName
+          - ImageURL
+      - Label:
+          default: Network Details
+        Parameters:
+          - VpcId
+          - PublicSubnet1
+          - PublicSubnet2
+          - PrivateSubnet1
+          - PrivateSubnet2
+          - CertificateArn
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name for ECS Jenkins Cluster
+    Default: JenkinsCluster
+  ImageURL:
+    Type: String
+    Description: URL for Jenkins Image
+    Default: docker.io/jenkins/jenkins
+  CertificateArn:
+    Type: String
+    AllowedPattern: '^.+$'
+    Description: ARN of an existing certificate which will be attached to the ALB created by the stack, to serve HTTPS traffic (mandatory).
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for Jenkins Deployment
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First Public Subnet for deployment
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second Public Subnet for deployment
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First Private Subnet for deployment
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second Private Subnet for deployment
+
+Resources:
+  JenkinsLBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Jenkins LoadBalancer
+      VpcId:            !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol:   tcp
+          Description:  Allow incoming access on port 8080
+          FromPort:     443
+          ToPort:       443
+          CidrIp:       0.0.0.0/0
+
+  JenkinsSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Jenkins instances
+      VpcId:            !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol:             tcp
+          Description:            Allow incoming access on port 8080 from JenkinsLB
+          FromPort:               8080
+          ToPort:                 8080
+          SourceSecurityGroupId:  !Ref JenkinsLBSG
+
+  JenkinsEFSSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Jenkins EFS Data volume
+      VpcId:            !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol:             tcp
+          Description:            EFS Access
+          FromPort:               2049
+          ToPort:                 2049
+          SourceSecurityGroupId:  !Ref JenkinsSG
+
+  JenkinsDataVol:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      FileSystemTags:
+        - Key: Name
+          Value: JenkinsDataVol
+
+  JenkinsDataVolAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref JenkinsDataVol
+      PosixUser:
+        Uid: '1000'
+        Gid: '1000'
+      RootDirectory:
+        CreationInfo:
+          OwnerGid: '1000'
+          OwnerUid: '1000'
+          Permissions: '755'
+        Path: '/jenkins-home'
+
+  JenkinsDataVolMountTargetSnA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref JenkinsDataVol
+      SecurityGroups:
+        - !Ref JenkinsEFSSG
+      SubnetId: !Ref PrivateSubnet1
+
+  JenkinsDataVolMountTargetSnB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref JenkinsDataVol
+      SecurityGroups:
+        - !Ref JenkinsEFSSG
+      SubnetId: !Ref PrivateSubnet2
+
+  JenkinsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/jenkinsECS
+      RetentionInDays: 3
+
+  JenkinsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  JenkinsTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                Resource: !GetAtt JenkinsDataVol.Arn
+
+  JenkinsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+      CapacityProviders:
+        - FARGATE_SPOT
+
+  JenkinsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Volumes:
+        - Name: jenkins-home
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref JenkinsDataVol
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !Ref JenkinsDataVolAccessPoint
+              IAM: ENABLED
+      ContainerDefinitions:
+        - Name: JenkinsInstance
+          Image: !Ref ImageURL
+          MountPoints:
+            - SourceVolume:   jenkins-home
+              ContainerPath:  /var/jenkins_home
+              ReadOnly:       false
+          PortMappings:
+            - ContainerPort: 8080
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-group: !Ref JenkinsLogGroup
+              awslogs-stream-prefix: ecsJenkins
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu:    '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      TaskRoleArn: !Ref JenkinsTaskRole
+      ExecutionRoleArn: !Ref JenkinsExecutionRole
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref JenkinsLBSG
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref JenkinsTargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+
+  JenkinsTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: /login
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+
+  JenkinsService:
+    Type: AWS::ECS::Service
+    DependsOn: LoadBalancerListener
+    Properties:
+      Cluster: !Ref JenkinsCluster
+      TaskDefinition: !Ref JenkinsTaskDefinition
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 300
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+          SecurityGroups:
+            - !GetAtt JenkinsSG.GroupId
+      LoadBalancers:
+        - ContainerName: JenkinsInstance
+          ContainerPort: 8080
+          TargetGroupArn: !Ref JenkinsTargetGroup

@@ -7,96 +7,101 @@ Metadata:
       - Label:
           default: ECS Details
         Parameters:
-          - ClusterName
-          - ImageURL
+          - pClusterName
+          - pContainerName
+          - pImageURL
       - Label:
           default: Network Details
         Parameters:
-          - VpcId
-          - PublicSubnet1
-          - PublicSubnet2
-          - PrivateSubnet1
-          - PrivateSubnet2
-          - CertificateArn
+          - pVpcId
+          - pPublicSubnet1
+          - pPublicSubnet2
+          - pPrivateSubnet1
+          - pPrivateSubnet2
+          - pCertificateArn
       - Label:
           default: If you'd like to scale the cluster down in an evening, specify the scale in and out times below in hh:mm format
         Parameters:
-          - ScaleOutTime
-          - ScaleInTime
+          - pScaleOutTime
+          - pScaleInTime
       - Label:
           default: Specify domain name (e.g. example.com) and domain name (e.g. jenkins.example.com) if you want to update Route53
         Parameters:
-          - DomainName
-          - DomainRecord
+          - pDomainName
+          - pDomainRecord
 
 Parameters:
-  ClusterName:
+  pClusterName:
     Type: String
     Description: Name for ECS Jenkins Cluster
     Default: JenkinsCluster
-  ImageURL:
+  pContainerName:
+    Type: String
+    Description: Name for Container within ECS Task Definition
+    Default: JenkinsContainer
+  pImageURL:
     Type: String
     Description: URL for Jenkins Image
     Default: docker.io/jenkins/jenkins
-  CertificateArn:
+  pCertificateArn:
     Type: String
     AllowedPattern: '^.+$'
     Description: ARN of an existing certificate which will be attached to the ALB created by the stack, to serve HTTPS traffic (mandatory).
-  VpcId:
+  pVpcId:
     Type: AWS::EC2::VPC::Id
     Description: VPC for Jenkins Deployment
-  PublicSubnet1:
+  pPublicSubnet1:
     Type: AWS::EC2::Subnet::Id
     Description: First Public Subnet for deployment
-  PublicSubnet2:
+  pPublicSubnet2:
     Type: AWS::EC2::Subnet::Id
     Description: Second Public Subnet for deployment
-  PrivateSubnet1:
+  pPrivateSubnet1:
     Type: AWS::EC2::Subnet::Id
     Description: First Private Subnet for deployment
-  PrivateSubnet2:
+  pPrivateSubnet2:
     Type: AWS::EC2::Subnet::Id
     Description: Second Private Subnet for deployment
-  ScaleOutTime:
+  pScaleOutTime:
     Type: String
     Description: Time to scale out (optional but should be in 24 hour hh:mm format if specified)
     Default: ""
     AllowedPattern: ^$|^[0-2]\d:[0-5]\d$
-  ScaleInTime:
+  pScaleInTime:
     Type: String
     Description: Time to scale in (optional but should be in 24 hour hh:mm format if specified)
     Default: ""
     AllowedPattern: ^$|^[0-2]\d:[0-5]\d$
-  DomainName:
+  pDomainName:
     Type: String
     Description: Route53 Hosted Zone Domain to add CNAME to (e.g. example.com), or blank string for no DNS updates
     Default: ""
     AllowedPattern: ^$|^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]+\.$
-  DomainRecord:
+  pDomainRecord:
     Type: String
     Description: Name for CNAME record pointing to ALB, or blank string for no DNS updates
     Default: ""
 
 Conditions:
-  ScheduleSpecified: !And
+  cScheduleSpecified: !And
     - !Not 
-      - !Equals [ !Ref ScaleOutTime, ""]
+      - !Equals [ !Ref pScaleOutTime, ""]
     - !Not 
-      - !Equals [ !Ref ScaleInTime, ""]
+      - !Equals [ !Ref pScaleInTime, ""]
 
-  Route53Update: !And
+  cRoute53Update: !And
     - !Not 
-      - !Equals [ !Ref DomainName, ""]
+      - !Equals [ !Ref pDomainName, ""]
     - !Not 
-      - !Equals [ !Ref DomainRecord, ""]
+      - !Equals [ !Ref pDomainRecord, ""]
 
 Resources:
 # Security Groups -------------------------------------------------------------
-  JenkinsLBSG:
+  rJenkinsLBSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security Group for Jenkins LoadBalancer
-      VpcId:            !Ref VpcId
+      VpcId:            !Ref pVpcId
       SecurityGroupIngress:
         - IpProtocol:   tcp
           Description:  Allow incoming access on port 8080
@@ -104,32 +109,32 @@ Resources:
           ToPort:       443
           CidrIp:       0.0.0.0/0
 
-  JenkinsSG:
+  rJenkinsSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security Group for Jenkins instances
-      VpcId:            !Ref VpcId
+      VpcId:            !Ref pVpcId
       SecurityGroupIngress:
         - IpProtocol:             tcp
           Description:            Allow incoming access on port 8080 from JenkinsLB
           FromPort:               8080
           ToPort:                 8080
-          SourceSecurityGroupId:  !Ref JenkinsLBSG
+          SourceSecurityGroupId:  !Ref rJenkinsLBSG
 
-  JenkinsEFSSG:
+  rJenkinsEFSSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security Group for Jenkins EFS Data volume
-      VpcId:            !Ref VpcId
+      VpcId:            !Ref pVpcId
       SecurityGroupIngress:
         - IpProtocol:             tcp
           Description:            EFS Access
           FromPort:               2049
           ToPort:                 2049
-          SourceSecurityGroupId:  !Ref JenkinsSG
+          SourceSecurityGroupId:  !Ref rJenkinsSG
 
 # EFS Resources ---------------------------------------------------------------
-  JenkinsDataVol:
+  rJenkinsDataVol:
     Type: AWS::EFS::FileSystem
     Properties:
       Encrypted: true
@@ -137,10 +142,10 @@ Resources:
         - Key: Name
           Value: JenkinsDataVol
 
-  JenkinsDataVolAccessPoint:
+  rJenkinsDataVolAccessPoint:
     Type: AWS::EFS::AccessPoint
     Properties:
-      FileSystemId: !Ref JenkinsDataVol
+      FileSystemId: !Ref rJenkinsDataVol
       PosixUser:
         Uid: '1000'
         Gid: '1000'
@@ -151,31 +156,31 @@ Resources:
           Permissions: '755'
         Path: '/jenkins-home'
 
-  JenkinsDataVolMountTargetSnA:
+  rJenkinsDataVolMountTargetSnA:
     Type: AWS::EFS::MountTarget
     Properties:
-      FileSystemId: !Ref JenkinsDataVol
+      FileSystemId: !Ref rJenkinsDataVol
       SecurityGroups:
-        - !Ref JenkinsEFSSG
-      SubnetId: !Ref PrivateSubnet1
+        - !Ref rJenkinsEFSSG
+      SubnetId: !Ref pPrivateSubnet1
 
-  JenkinsDataVolMountTargetSnB:
+  rJenkinsDataVolMountTargetSnB:
     Type: AWS::EFS::MountTarget
     Properties:
-      FileSystemId: !Ref JenkinsDataVol
+      FileSystemId: !Ref rJenkinsDataVol
       SecurityGroups:
-        - !Ref JenkinsEFSSG
-      SubnetId: !Ref PrivateSubnet2
+        - !Ref rJenkinsEFSSG
+      SubnetId: !Ref pPrivateSubnet2
 
 # Log Group -------------------------------------------------------------------
-  JenkinsLogGroup:
+  rJenkinsLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: /ecs/jenkinsECS
+      LogGroupName: !Sub "/ecs/${pClusterName}"
       RetentionInDays: 3
 
 # IAM Roles -------------------------------------------------------------------
-  JenkinsExecutionRole:
+  rJenkinsExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       Path: /
@@ -188,7 +193,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
-  JenkinsTaskRole:
+  rJenkinsTaskRole:
     Type: AWS::IAM::Role
     Properties:
       Path: /
@@ -207,11 +212,11 @@ Resources:
                 Action:
                   - elasticfilesystem:ClientMount
                   - elasticfilesystem:ClientWrite
-                Resource: !GetAtt JenkinsDataVol.Arn
+                Resource: !GetAtt rJenkinsDataVol.Arn
 
-  JenkinsAutoscalingRole:
+  rJenkinsAutoscalingRole:
     Type: AWS::IAM::Role
-    Condition: ScheduleSpecified
+    Condition: cScheduleSpecified
     Properties:
       Path: /
       AssumeRolePolicyDocument:
@@ -233,27 +238,27 @@ Resources:
                 Resource: '*'
 
 # ECS Resources ---------------------------------------------------------------
-  JenkinsCluster:
+  rJenkinsCluster:
     Type: AWS::ECS::Cluster
     Properties:
-      ClusterName: !Ref ClusterName
+      ClusterName: !Ref pClusterName
       CapacityProviders:
         - FARGATE_SPOT
 
-  JenkinsTaskDefinition:
+  rJenkinsTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Volumes:
         - Name: jenkins-home
           EFSVolumeConfiguration:
-            FilesystemId: !Ref JenkinsDataVol
+            FilesystemId: !Ref rJenkinsDataVol
             TransitEncryption: ENABLED
             AuthorizationConfig:
-              AccessPointId: !Ref JenkinsDataVolAccessPoint
+              AccessPointId: !Ref rJenkinsDataVolAccessPoint
               IAM: ENABLED
       ContainerDefinitions:
-        - Name: JenkinsInstance
-          Image: !Ref ImageURL
+        - Name: !Ref pContainerName
+          Image: !Ref pImageURL
           MountPoints:
             - SourceVolume:   jenkins-home
               ContainerPath:  /var/jenkins_home
@@ -264,22 +269,22 @@ Resources:
             LogDriver: awslogs
             Options:
               awslogs-region: !Ref 'AWS::Region'
-              awslogs-group: !Ref JenkinsLogGroup
+              awslogs-group: !Ref rJenkinsLogGroup
               awslogs-stream-prefix: ecsJenkins
       RequiresCompatibilities:
         - FARGATE
       Cpu:    '512'
       Memory: '1024'
       NetworkMode: awsvpc
-      TaskRoleArn: !Ref JenkinsTaskRole
-      ExecutionRoleArn: !Ref JenkinsExecutionRole
+      TaskRoleArn: !Ref rJenkinsTaskRole
+      ExecutionRoleArn: !Ref rJenkinsExecutionRole
 
-  JenkinsService:
+  rJenkinsService:
     Type: AWS::ECS::Service
-    DependsOn: LoadBalancerListener
+    DependsOn: rLoadBalancerListener
     Properties:
-      Cluster: !Ref JenkinsCluster
-      TaskDefinition: !Ref JenkinsTaskDefinition
+      Cluster: !Ref rJenkinsCluster
+      TaskDefinition: !Ref rJenkinsTaskDefinition
       DesiredCount: 1
       HealthCheckGracePeriodSeconds: 300
       LaunchType: FARGATE
@@ -290,54 +295,54 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
           Subnets:
-            - !Ref PublicSubnet1
-            - !Ref PublicSubnet2
+            - !Ref pPublicSubnet1
+            - !Ref pPublicSubnet2
           SecurityGroups:
-            - !GetAtt JenkinsSG.GroupId
+            - !GetAtt rJenkinsSG.GroupId
       LoadBalancers:
-        - ContainerName: JenkinsInstance
+        - ContainerName: !Ref pContainerName
           ContainerPort: 8080
-          TargetGroupArn: !Ref JenkinsTargetGroup
+          TargetGroupArn: !Ref rJenkinsTargetGroup
 
 
 # LoadBalancer Resources ------------------------------------------------------
-  LoadBalancer:
+  rLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Subnets:
-        - !Ref PublicSubnet1
-        - !Ref PublicSubnet2
+        - !Ref pPublicSubnet1
+        - !Ref pPublicSubnet2
       SecurityGroups:
-        - !Ref JenkinsLBSG
+        - !Ref rJenkinsLBSG
 
-  LoadBalancerListener:
+  rLoadBalancerListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       Port: 443
       Protocol: HTTPS
       Certificates:
-        - CertificateArn: !Ref CertificateArn
+        - CertificateArn: !Ref pCertificateArn
       DefaultActions:
         - Type: forward
           ForwardConfig:
             TargetGroups:
-              - TargetGroupArn: !Ref JenkinsTargetGroup
-      LoadBalancerArn: !Ref LoadBalancer
+              - TargetGroupArn: !Ref rJenkinsTargetGroup
+      LoadBalancerArn: !Ref rLoadBalancer
 
-  JenkinsTargetGroup:
+  rJenkinsTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       HealthCheckPath: /login
       Port: 8080
       Protocol: HTTP
       TargetType: ip
-      VpcId: !Ref VpcId
+      VpcId: !Ref pVpcId
 
 
 # Autoscaling Schedule --------------------------------------------------------
-  ServiceScalableTarget:
+  rServiceScalableTarget:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
-    Condition: ScheduleSpecified
+    Condition: cScheduleSpecified
     Properties:
       MinCapacity: 0
       MaxCapacity: 1
@@ -346,24 +351,24 @@ Resources:
       ResourceId: !Join [
         "/", [
           "service",
-          !Ref JenkinsCluster,
-          !GetAtt JenkinsService.Name
+          !Ref rJenkinsCluster,
+          !GetAtt rJenkinsService.Name
         ]
       ]
-      RoleARN: !GetAtt JenkinsAutoscalingRole.Arn
+      RoleARN: !GetAtt rJenkinsAutoscalingRole.Arn
       ScheduledActions:
         - Schedule: !Sub
           - "cron(${mm} ${hh} * * ? *)"
-          - mm: !Select [ 1, !Split [ ":", !Ref ScaleOutTime ]]
-            hh: !Select [ 0, !Split [ ":", !Ref ScaleOutTime ]]
+          - mm: !Select [ 1, !Split [ ":", !Ref pScaleOutTime ]]
+            hh: !Select [ 0, !Split [ ":", !Ref pScaleOutTime ]]
           ScheduledActionName: increaseSchedule
           ScalableTargetAction: 
             MinCapacity: 1
             MaxCapacity: 1
         - Schedule: !Sub
           - "cron(${mm} ${hh} * * ? *)"
-          - mm: !Select [ 1, !Split [ ":", !Ref ScaleInTime ]]
-            hh: !Select [ 0, !Split [ ":", !Ref ScaleInTime ]]
+          - mm: !Select [ 1, !Split [ ":", !Ref pScaleInTime ]]
+            hh: !Select [ 0, !Split [ ":", !Ref pScaleInTime ]]
           ScheduledActionName: decreaseSchedule
           ScalableTargetAction: 
             MinCapacity: 0
@@ -371,14 +376,14 @@ Resources:
 
 
 # Route53 Update --------------------------------------------------------------
-  R53LBName:
+  rR53LBName:
     Type: AWS::Route53::RecordSet
-    Condition: Route53Update
+    Condition: cRoute53Update
     Properties:
-      HostedZoneName: !Ref DomainName
+      HostedZoneName: !Ref pDomainName
       Type:           CNAME
-      Name:           !Ref DomainRecord
+      Name:           !Ref pDomainRecord
       TTL:            300
       ResourceRecords:
-        - !GetAtt LoadBalancer.DNSName
+        - !GetAtt rLoadBalancer.DNSName
 

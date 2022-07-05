@@ -18,6 +18,17 @@ Metadata:
           - PrivateSubnet1
           - PrivateSubnet2
           - CertificateArn
+      - Label:
+          default: If you'd like to scale the cluster down in an evening, specify the scale in and out times below in hh:mm format
+        Parameters:
+          - ScaleOutTime
+          - ScaleInTime
+      - Label:
+          default: Specify domain name (e.g. example.com) and domain name (e.g. jenkins.example.com) if you want to update Route53
+        Parameters:
+          - DomainName
+          - DomainRecord
+
 Parameters:
   ClusterName:
     Type: String
@@ -46,8 +57,41 @@ Parameters:
   PrivateSubnet2:
     Type: AWS::EC2::Subnet::Id
     Description: Second Private Subnet for deployment
+  ScaleOutTime:
+    Type: String
+    Description: Time to scale out (optional but should be in 24 hour hh:mm format if specified)
+    Default: ""
+    AllowedPattern: ^$|^[0-2]\d:[0-5]\d$
+  ScaleInTime:
+    Type: String
+    Description: Time to scale in (optional but should be in 24 hour hh:mm format if specified)
+    Default: ""
+    AllowedPattern: ^$|^[0-2]\d:[0-5]\d$
+  DomainName:
+    Type: String
+    Description: Route53 Hosted Zone Domain to add CNAME to (e.g. example.com), or blank string for no DNS updates
+    Default: ""
+    AllowedPattern: ^$|^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]+\.$
+  DomainRecord:
+    Type: String
+    Description: Name for CNAME record pointing to ALB, or blank string for no DNS updates
+    Default: ""
+
+Conditions:
+  ScheduleSpecified: !And
+    - !Not 
+      - !Equals [ !Ref ScaleOutTime, ""]
+    - !Not 
+      - !Equals [ !Ref ScaleInTime, ""]
+
+  Route53Update: !And
+    - !Not 
+      - !Equals [ !Ref DomainName, ""]
+    - !Not 
+      - !Equals [ !Ref DomainRecord, ""]
 
 Resources:
+# Security Groups -------------------------------------------------------------
   JenkinsLBSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -84,6 +128,7 @@ Resources:
           ToPort:                 2049
           SourceSecurityGroupId:  !Ref JenkinsSG
 
+# EFS Resources ---------------------------------------------------------------
   JenkinsDataVol:
     Type: AWS::EFS::FileSystem
     Properties:
@@ -122,12 +167,14 @@ Resources:
         - !Ref JenkinsEFSSG
       SubnetId: !Ref PrivateSubnet2
 
+# Log Group -------------------------------------------------------------------
   JenkinsLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /ecs/jenkinsECS
       RetentionInDays: 3
 
+# IAM Roles -------------------------------------------------------------------
   JenkinsExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -162,6 +209,30 @@ Resources:
                   - elasticfilesystem:ClientWrite
                 Resource: !GetAtt JenkinsDataVol.Arn
 
+  JenkinsAutoscalingRole:
+    Type: AWS::IAM::Role
+    Condition: ScheduleSpecified
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+      Policies:
+        - PolicyName: ECS_Autoscaling
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - application-autoscaling:*
+                  - ecs:DescribeServices
+                  - ecs:UpdateService
+                Resource: '*'
+
+# ECS Resources ---------------------------------------------------------------
   JenkinsCluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -203,6 +274,33 @@ Resources:
       TaskRoleArn: !Ref JenkinsTaskRole
       ExecutionRoleArn: !Ref JenkinsExecutionRole
 
+  JenkinsService:
+    Type: AWS::ECS::Service
+    DependsOn: LoadBalancerListener
+    Properties:
+      Cluster: !Ref JenkinsCluster
+      TaskDefinition: !Ref JenkinsTaskDefinition
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 300
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+          SecurityGroups:
+            - !GetAtt JenkinsSG.GroupId
+      LoadBalancers:
+        - ContainerName: JenkinsInstance
+          ContainerPort: 8080
+          TargetGroupArn: !Ref JenkinsTargetGroup
+
+
+# LoadBalancer Resources ------------------------------------------------------
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -235,27 +333,52 @@ Resources:
       TargetType: ip
       VpcId: !Ref VpcId
 
-  JenkinsService:
-    Type: AWS::ECS::Service
-    DependsOn: LoadBalancerListener
+
+# Autoscaling Schedule --------------------------------------------------------
+  ServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Condition: ScheduleSpecified
     Properties:
-      Cluster: !Ref JenkinsCluster
-      TaskDefinition: !Ref JenkinsTaskDefinition
-      DesiredCount: 1
-      HealthCheckGracePeriodSeconds: 300
-      LaunchType: FARGATE
-      DeploymentConfiguration:
-        MinimumHealthyPercent: 0
-        MaximumPercent: 100
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          AssignPublicIp: ENABLED
-          Subnets:
-            - !Ref PublicSubnet1
-            - !Ref PublicSubnet2
-          SecurityGroups:
-            - !GetAtt JenkinsSG.GroupId
-      LoadBalancers:
-        - ContainerName: JenkinsInstance
-          ContainerPort: 8080
-          TargetGroupArn: !Ref JenkinsTargetGroup
+      MinCapacity: 0
+      MaxCapacity: 1
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Join [
+        "/", [
+          "service",
+          !Ref JenkinsCluster,
+          !GetAtt JenkinsService.Name
+        ]
+      ]
+      RoleARN: !GetAtt JenkinsAutoscalingRole.Arn
+      ScheduledActions:
+        - Schedule: !Sub
+          - "cron(${mm} ${hh} * * ? *)"
+          - mm: !Select [ 1, !Split [ ":", !Ref ScaleOutTime ]]
+            hh: !Select [ 0, !Split [ ":", !Ref ScaleOutTime ]]
+          ScheduledActionName: increaseSchedule
+          ScalableTargetAction: 
+            MinCapacity: 1
+            MaxCapacity: 1
+        - Schedule: !Sub
+          - "cron(${mm} ${hh} * * ? *)"
+          - mm: !Select [ 1, !Split [ ":", !Ref ScaleInTime ]]
+            hh: !Select [ 0, !Split [ ":", !Ref ScaleInTime ]]
+          ScheduledActionName: decreaseSchedule
+          ScalableTargetAction: 
+            MinCapacity: 0
+            MaxCapacity: 0       
+
+
+# Route53 Update --------------------------------------------------------------
+  R53LBName:
+    Type: AWS::Route53::RecordSet
+    Condition: Route53Update
+    Properties:
+      HostedZoneName: !Ref DomainName
+      Type:           CNAME
+      Name:           !Ref DomainRecord
+      TTL:            300
+      ResourceRecords:
+        - !GetAtt LoadBalancer.DNSName
+

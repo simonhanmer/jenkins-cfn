@@ -133,6 +133,126 @@ Resources:
           ToPort:                 2049
           SourceSecurityGroupId:  !Ref rJenkinsSG
 
+  rVPCEndpointSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group to enable access to VPC Endpoints
+      VpcId:            !Ref pVpcId
+      SecurityGroupIngress:
+        - IpProtocol:             tcp
+          Description:            API Access
+          FromPort:               443
+          ToPort:                 443
+          SourceSecurityGroupId:  !Ref rJenkinsSG
+        - IpProtocol:             tcp
+          Description:            API Access
+          FromPort:               80
+          ToPort:                 80
+          SourceSecurityGroupId:  !Ref rJenkinsSG
+
+# VPC Endpoint Resources ---------------------------------------------------------------
+  rCWLogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType:    Interface
+      VpcId:              !Ref pVpcId
+      SubnetIds:
+        -                 !Ref pPrivateSubnet1
+        -                 !Ref pPrivateSubnet2
+      SecurityGroupIds:
+        -                 !Ref rVPCEndpointSG
+      PrivateDnsEnabled:  true
+
+  rECRApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType:    Interface
+      VpcId:              !Ref pVpcId
+      SubnetIds:
+        -                 !Ref pPrivateSubnet1
+        -                 !Ref pPrivateSubnet2
+      SecurityGroupIds:
+        -                 !Ref rVPCEndpointSG
+      PrivateDnsEnabled:  true
+
+  rECRDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcEndpointType:    Interface
+      VpcId:              !Ref pVpcId
+      SubnetIds:
+        -                 !Ref pPrivateSubnet1
+        -                 !Ref pPrivateSubnet2
+      SecurityGroupIds:
+        -                 !Ref rVPCEndpointSG
+      PrivateDnsEnabled:  true
+
+  rECSEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecs"
+      VpcId:              !Ref pVpcId
+      SubnetIds:
+        -                 !Ref pPrivateSubnet1
+        -                 !Ref pPrivateSubnet2
+      SecurityGroupIds:
+        -                 !Ref rVPCEndpointSG
+      PrivateDnsEnabled:  true
+      VpcEndpointType:    Interface
+
+  rECSAgentEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecs-agent"
+      VpcEndpointType:    Interface
+      VpcId:              !Ref pVpcId
+      SubnetIds:
+        -                 !Ref pPrivateSubnet1
+        -                 !Ref pPrivateSubnet2
+      SecurityGroupIds:
+        -                 !Ref rVPCEndpointSG
+      PrivateDnsEnabled:  true
+
+  rECSTelemetryEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecs-telemetry"
+      VpcEndpointType:    Interface
+      VpcId:              !Ref pVpcId
+      SubnetIds:
+        -                 !Ref pPrivateSubnet1
+        -                 !Ref pPrivateSubnet2
+      SecurityGroupIds:
+        -                 !Ref rVPCEndpointSG
+      PrivateDnsEnabled:  true
+
+  rEFSEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.elasticfilesystem"
+      VpcEndpointType:    Interface
+      VpcId:              !Ref pVpcId
+      SubnetIds:
+        -                 !Ref pPrivateSubnet1
+        -                 !Ref pPrivateSubnet2
+      SecurityGroupIds:
+        -                 !Ref rVPCEndpointSG
+      PrivateDnsEnabled:  true
+
+  rS3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType:    Gateway
+      VpcId:              !Ref pVpcId
+      RouteTableIds:
+        -                 rtb-0f9a5d97d97d698fa
+        -                 rtb-0318e6c6e0615d77c
+
+
 # EFS Resources ---------------------------------------------------------------
   rJenkinsDataVol:
     Type: AWS::EFS::FileSystem
@@ -295,8 +415,8 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
           Subnets:
-            - !Ref pPublicSubnet1
-            - !Ref pPublicSubnet2
+            - !Ref pPrivateSubnet1
+            - !Ref pPrivateSubnet2
           SecurityGroups:
             - !GetAtt rJenkinsSG.GroupId
       LoadBalancers:

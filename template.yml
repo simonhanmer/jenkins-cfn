@@ -2,28 +2,33 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: Deploy an ECS cluster running Jenkins with a persistent data store
 
 Metadata: 
-  AWS::CloudFormation::Interface: 
+  AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
           default: ECS Details
         Parameters:
           - pClusterName
           - pContainerName
+          - pContainerCpu
+          - pContainerMemory
           - pImageURL
+          - pCertificateArn
+
       - Label:
-          default: Network Details
+          default: If you'd like to scale the cluster down in an evening, specify the scale in and out times below in hh:mm format
+        Parameters:
+          - pScaleOutTime
+          - pScaleInTime
+
+      - Label:
+          default: Network configuration
         Parameters:
           - pVpcId
           - pPublicSubnet1
           - pPublicSubnet2
           - pPrivateSubnet1
           - pPrivateSubnet2
-          - pCertificateArn
-      - Label:
-          default: If you'd like to scale the cluster down in an evening, specify the scale in and out times below in hh:mm format
-        Parameters:
-          - pScaleOutTime
-          - pScaleInTime
+          - pSubnetDeployments
       - Label:
           default: Specify domain name (e.g. example.com) and domain name (e.g. jenkins.example.com) if you want to update Route53
         Parameters:
@@ -31,56 +36,77 @@ Metadata:
           - pDomainRecord
 
 Parameters:
-  pClusterName:
-    Type: String
-    Description: Name for ECS Jenkins Cluster
-    Default: JenkinsCluster
-  pContainerName:
-    Type: String
-    Description: Name for Container within ECS Task Definition
-    Default: JenkinsContainer
-  pImageURL:
-    Type: String
-    Description: URL for Jenkins Image
-    Default: docker.io/jenkins/jenkins
-  pCertificateArn:
-    Type: String
-    AllowedPattern: '^.+$'
-    Description: ARN of an existing certificate which will be attached to the ALB created by the stack, to serve HTTPS traffic (mandatory).
+  # pEnvironmentName:
+  #   Type:           String
+  #   Default:        JenkinsECSDeployment
+  #   Description:    Name for project deployment
   pVpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: VPC for Jenkins Deployment
-  pPublicSubnet1:
-    Type: AWS::EC2::Subnet::Id
-    Description: First Public Subnet for deployment
-  pPublicSubnet2:
-    Type: AWS::EC2::Subnet::Id
-    Description: Second Public Subnet for deployment
-  pPrivateSubnet1:
-    Type: AWS::EC2::Subnet::Id
-    Description: First Private Subnet for deployment
-  pPrivateSubnet2:
-    Type: AWS::EC2::Subnet::Id
-    Description: Second Private Subnet for deployment
-  pScaleOutTime:
-    Type: String
-    Description: Time to scale out (optional but should be in 24 hour hh:mm format if specified)
-    Default: ""
-    AllowedPattern: ^$|^[0-2]\d:[0-5]\d$
-  pScaleInTime:
-    Type: String
-    Description: Time to scale in (optional but should be in 24 hour hh:mm format if specified)
-    Default: ""
-    AllowedPattern: ^$|^[0-2]\d:[0-5]\d$
+    Type:           AWS::EC2::VPC::Id
+    Description:    VPC for deployment
+  pCertificateArn:
+    Type:           String
+    AllowedPattern: '^.+$'
+    Description:    ARN of an existing certificate which will be attached to the ALB created by the stack, to serve HTTPS traffic (mandatory).
+  pClusterName:
+    Type:           String
+    Description:    Name for ECS Jenkins Cluster
+    Default:        JenkinsCluster
+  pContainerCpu:
+    Type:           Number
+    Description:    Number of CPU units for ECS Task Definition - 1 vCPU = 256 CpuUnits
+    AllowedValues:  [ 256, 512, 1024, 2048, 4096 ]
+    Default:        512
+  pContainerName:
+    Type:           String
+    Description:    Name for Container within ECS Task Definition
+    Default:        JenkinsContainer
+  pContainerMemory:
+    Type:           Number
+    Description:    Amount of memory used by task (in MiB)
+    AllowedValues:  [ 512, 1024, 2048, 3072, 4096, 5120 ]
+    Default:        1024
   pDomainName:
-    Type: String
-    Description: Route53 Hosted Zone Domain to add CNAME to (e.g. example.com), or blank string for no DNS updates
-    Default: ""
+    Type:           String
+    Description:    Route53 Hosted Zone Domain to add CNAME to (e.g. example.com), or blank string for no DNS updates
+    Default:        ""
     AllowedPattern: ^$|^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]+\.$
   pDomainRecord:
-    Type: String
-    Description: Name for CNAME record pointing to ALB, or blank string for no DNS updates
-    Default: ""
+    Type:           String
+    Description:    Name for CNAME record pointing to ALB, or blank string for no DNS updates
+    Default:        ""  
+  pImageURL:
+    Type:           String
+    Description:    URL for Jenkins Image
+    Default:        docker.io/jenkins/jenkins
+  pPublicSubnet1:
+    Type:           AWS::EC2::Subnet::Id
+    Description:    Public subnet in availability zone 1
+  pPublicSubnet2:
+    Type:           AWS::EC2::Subnet::Id
+    Description:    Public subnet in availability zone 2
+  pPrivateSubnet1:
+    Type:           AWS::EC2::Subnet::Id
+    Description:    Private subnet in availability zone 1
+  pPrivateSubnet2:
+    Type:           AWS::EC2::Subnet::Id
+    Description:    Private subnet in availability zone 2  
+  pScaleInTime:
+    Type:           String
+    Description:    Time to scale in (optional but should be in 24 hour hh:mm format if specified)
+    Default:        ""
+    AllowedPattern: ^$|^[0-2]\d:[0-5]\d$
+  pScaleOutTime:
+    Type:           String
+    Description:    Time to scale out (optional but should be in 24 hour hh:mm format if specified)
+    Default:        ""
+    AllowedPattern: ^$|^[0-2]\d:[0-5]\d$
+  pSubnetDeployments:
+    Type:           String
+    AllowedValues:  [ 'Public', 'Private' ]
+    Default:        'Public'
+    Description:    Deploy ECS tasks to public or private subnets? Private will require NAT Gateways attached to subnets.
+
+
 
 Conditions:
   cScheduleSpecified: !And
@@ -94,6 +120,8 @@ Conditions:
       - !Equals [ !Ref pDomainName, ""]
     - !Not 
       - !Equals [ !Ref pDomainRecord, ""]
+
+  cUsePublicSubnets: !Equals [ !Ref pSubnetDeployments, "Public"]
 
 Resources:
 # Security Groups -------------------------------------------------------------
@@ -132,125 +160,6 @@ Resources:
           FromPort:               2049
           ToPort:                 2049
           SourceSecurityGroupId:  !Ref rJenkinsSG
-
-  rVPCEndpointSG:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Security Group to enable access to VPC Endpoints
-      VpcId:            !Ref pVpcId
-      SecurityGroupIngress:
-        - IpProtocol:             tcp
-          Description:            API Access
-          FromPort:               443
-          ToPort:                 443
-          SourceSecurityGroupId:  !Ref rJenkinsSG
-        - IpProtocol:             tcp
-          Description:            API Access
-          FromPort:               80
-          ToPort:                 80
-          SourceSecurityGroupId:  !Ref rJenkinsSG
-
-# VPC Endpoint Resources ---------------------------------------------------------------
-  rCWLogsEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.logs"
-      VpcEndpointType:    Interface
-      VpcId:              !Ref pVpcId
-      SubnetIds:
-        -                 !Ref pPrivateSubnet1
-        -                 !Ref pPrivateSubnet2
-      SecurityGroupIds:
-        -                 !Ref rVPCEndpointSG
-      PrivateDnsEnabled:  true
-
-  rECRApiEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecr.api"
-      VpcEndpointType:    Interface
-      VpcId:              !Ref pVpcId
-      SubnetIds:
-        -                 !Ref pPrivateSubnet1
-        -                 !Ref pPrivateSubnet2
-      SecurityGroupIds:
-        -                 !Ref rVPCEndpointSG
-      PrivateDnsEnabled:  true
-
-  rECRDkrEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
-      VpcEndpointType:    Interface
-      VpcId:              !Ref pVpcId
-      SubnetIds:
-        -                 !Ref pPrivateSubnet1
-        -                 !Ref pPrivateSubnet2
-      SecurityGroupIds:
-        -                 !Ref rVPCEndpointSG
-      PrivateDnsEnabled:  true
-
-  rECSEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecs"
-      VpcId:              !Ref pVpcId
-      SubnetIds:
-        -                 !Ref pPrivateSubnet1
-        -                 !Ref pPrivateSubnet2
-      SecurityGroupIds:
-        -                 !Ref rVPCEndpointSG
-      PrivateDnsEnabled:  true
-      VpcEndpointType:    Interface
-
-  rECSAgentEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecs-agent"
-      VpcEndpointType:    Interface
-      VpcId:              !Ref pVpcId
-      SubnetIds:
-        -                 !Ref pPrivateSubnet1
-        -                 !Ref pPrivateSubnet2
-      SecurityGroupIds:
-        -                 !Ref rVPCEndpointSG
-      PrivateDnsEnabled:  true
-
-  rECSTelemetryEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.ecs-telemetry"
-      VpcEndpointType:    Interface
-      VpcId:              !Ref pVpcId
-      SubnetIds:
-        -                 !Ref pPrivateSubnet1
-        -                 !Ref pPrivateSubnet2
-      SecurityGroupIds:
-        -                 !Ref rVPCEndpointSG
-      PrivateDnsEnabled:  true
-
-  rEFSEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.elasticfilesystem"
-      VpcEndpointType:    Interface
-      VpcId:              !Ref pVpcId
-      SubnetIds:
-        -                 !Ref pPrivateSubnet1
-        -                 !Ref pPrivateSubnet2
-      SecurityGroupIds:
-        -                 !Ref rVPCEndpointSG
-      PrivateDnsEnabled:  true
-
-  rS3Endpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      ServiceName:        !Sub "com.amazonaws.${AWS::Region}.s3"
-      VpcEndpointType:    Gateway
-      VpcId:              !Ref pVpcId
-      RouteTableIds:
-        -                 rtb-0f9a5d97d97d698fa
-        -                 rtb-0318e6c6e0615d77c
 
 
 # EFS Resources ---------------------------------------------------------------
@@ -309,7 +218,9 @@ Resources:
           - Action: sts:AssumeRole
             Effect: Allow
             Principal:
-              Service: ecs-tasks.amazonaws.com
+              Service:
+                - ecs.amazonaws.com
+                - ecs-tasks.amazonaws.com
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
@@ -324,7 +235,7 @@ Resources:
             Principal:
               Service: ecs-tasks.amazonaws.com
       Policies:
-        - PolicyName: root
+        - PolicyName: TaskRolePolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -369,34 +280,35 @@ Resources:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Volumes:
-        - Name: jenkins-home
+        - Name:                 jenkins-home
           EFSVolumeConfiguration:
-            FilesystemId: !Ref rJenkinsDataVol
-            TransitEncryption: ENABLED
+            FilesystemId:       !Ref rJenkinsDataVol
+            TransitEncryption:  ENABLED
             AuthorizationConfig:
-              AccessPointId: !Ref rJenkinsDataVolAccessPoint
-              IAM: ENABLED
+              AccessPointId:    !Ref rJenkinsDataVolAccessPoint
+              IAM:              ENABLED
       ContainerDefinitions:
-        - Name: !Ref pContainerName
-          Image: !Ref pImageURL
+        - Name:                 !Ref pContainerName
+#          Image:                !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${pImageURL}"
+          Image:                !Ref pImageURL
           MountPoints:
-            - SourceVolume:   jenkins-home
-              ContainerPath:  /var/jenkins_home
-              ReadOnly:       false
+            - SourceVolume:     jenkins-home
+              ContainerPath:    /var/jenkins_home
+              ReadOnly:         false
           PortMappings:
-            - ContainerPort: 8080
+            - ContainerPort:    8080
           LogConfiguration:
-            LogDriver: awslogs
+            LogDriver:          awslogs
             Options:
-              awslogs-region: !Ref 'AWS::Region'
-              awslogs-group: !Ref rJenkinsLogGroup
-              awslogs-stream-prefix: ecsJenkins
+              awslogs-region:   !Ref 'AWS::Region'
+              awslogs-group:    !Ref rJenkinsLogGroup
+              awslogs-stream-prefix: stdout
       RequiresCompatibilities:
         - FARGATE
-      Cpu:    '512'
-      Memory: '1024'
+      Cpu:    !Ref pContainerCpu
+      Memory: !Ref pContainerMemory
       NetworkMode: awsvpc
-      TaskRoleArn: !Ref rJenkinsTaskRole
+      TaskRoleArn:      !Ref rJenkinsTaskRole
       ExecutionRoleArn: !Ref rJenkinsExecutionRole
 
   rJenkinsService:
@@ -415,8 +327,14 @@ Resources:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
           Subnets:
-            - !Ref pPrivateSubnet1
-            - !Ref pPrivateSubnet2
+            - !If 
+              - cUsePublicSubnets
+              - !Ref pPublicSubnet1
+              - !Ref pPrivateSubnet1
+            - !If 
+              - cUsePublicSubnets
+              - !Ref pPublicSubnet2
+              - !Ref pPrivateSubnet2
           SecurityGroups:
             - !GetAtt rJenkinsSG.GroupId
       LoadBalancers:
@@ -507,3 +425,8 @@ Resources:
       ResourceRecords:
         - !GetAtt rLoadBalancer.DNSName
 
+
+Outputs:
+  oImageUrl:
+    Description: URL For Docker image
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${pImageURL}"

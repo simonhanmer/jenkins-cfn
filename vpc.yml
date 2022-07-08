@@ -239,7 +239,7 @@ Resources:
     Type: AWS::EC2::Route
     Condition: cCreateGateways
     Properties:
-      GatewayId:            !Ref rNatGateway1
+      NatGatewayId:         !Ref rNatGateway1
       RouteTableId:         !Ref rPrivateRouteTable1
       DestinationCidrBlock: 0.0.0.0/0
 
@@ -247,7 +247,7 @@ Resources:
     Type: AWS::EC2::Route
     Condition: cCreateGateways
     Properties:
-      GatewayId:            !Ref rNatGateway2
+      NatGatewayId:         !Ref rNatGateway2
       RouteTableId:         !Ref rPrivateRouteTable2
       DestinationCidrBlock: 0.0.0.0/0
 

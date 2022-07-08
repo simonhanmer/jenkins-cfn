@@ -264,3 +264,20 @@ Resources:
     Properties:
       SubnetId:     !Ref rPrivateSubnet2
       RouteTableId: !Ref rPrivateRouteTable2
+
+Outputs:
+  oVpcId:
+    Description:  Id of created VPC
+    Value:        !Ref rVPC
+  oPublicSubnet1Id:
+    Description:  Id of Public Subnet in Availability Zone 1
+    Value:        !Ref rPublicSubnet1
+  oPublicSubnet2Id:
+    Description: Id of Public Subnet in Availability Zone 2
+    Value:        !Ref rPublicSubnet2
+  oPrivateSubnet1Id:
+    Description: Id of Private Subnet in Availability Zone 1
+    Value:        !Ref rPrivateSubnet1
+  oPrivateSubnet2Id:
+    Description: Id of Private Subnet in Availability Zone 2
+    Value:        !Ref rPrivateSubnet2
